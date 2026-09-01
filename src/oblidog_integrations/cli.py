@@ -4,11 +4,13 @@ import argparse
 from collections.abc import Callable
 
 from oblidog_integrations.integrations.demo import run as run_demo
+from oblidog_integrations.integrations.ekartoteka import run as run_ekartoteka
 
 IntegrationRunner = Callable[[], None]
 
 INTEGRATIONS: dict[str, IntegrationRunner] = {
     "demo": run_demo,
+    "ekartoteka": run_ekartoteka,
 }
 
 
