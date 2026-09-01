@@ -10,7 +10,11 @@ The repository is a monorepo for integrations that run periodically, fetch data 
 src/oblidog_integrations/
 ├── cli.py
 └── integrations/
-    └── demo/
+    ├── demo/
+    │   ├── provider.py
+    │   └── sync.py
+    └── ekartoteka/
+        ├── models.py
         ├── provider.py
         └── sync.py
 ```
@@ -44,6 +48,26 @@ DEMO_INVOICE_NUMBER=DEMO-001
 ```
 
 The demo integration expects exactly one matching obligation for the current month. It updates its amount, appends an import note, and marks it ready.
+
+## eKartoteka
+
+The first real integration is `ekartoteka`. Its Oblidog-side sync contract is already defined: a provider returns a normalized monthly charge containing the period, total amount, optional due date, optional external identifier and individual charge components. The sync updates exactly one matching obligation, upserts its components and marks it ready.
+
+The eKartoteka HTTP implementation is intentionally still pending. There is no public API documentation, so the next step is to capture and map the requests used by the web/mobile client and implement authentication plus payload parsing exclusively inside `integrations/ekartoteka/provider.py`.
+
+Expected Oblidog configuration:
+
+```text
+OBLIDOG_URL=...
+OBLIDOG_API_KEY=...
+OBLIDOG_CATEGORY_CODE=...
+```
+
+Once provider HTTP support is implemented, the integration will run as:
+
+```bash
+uv run oblidog-integrations ekartoteka
+```
 
 ## Docker
 
