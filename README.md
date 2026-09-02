@@ -27,6 +27,20 @@ uv run ruff check .
 uv run pytest
 ```
 
+The same common commands are available through `make`:
+
+```bash
+make sync
+make check
+make run-ekartoteka
+```
+
+Before running e-Kartoteka for the first time, prepare its local configuration:
+
+```bash
+cp .env.ekartoteka.example .env.ekartoteka
+```
+
 Run the proof-of-concept integration with:
 
 ```bash
