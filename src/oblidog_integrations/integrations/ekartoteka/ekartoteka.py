@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 
@@ -17,6 +18,11 @@ from oblidog_integrations.integrations.ekartoteka.models import (
     MonthlyFeeItem,
     Premises,
 )
+
+MVP_ACCOUNT_SYMBOLS = ("204", "206", "210")
+MVP_UPDATE_CATEGORIES = ("DK", "DKL", "LI", "NRB", "NL")
+MONITORED_UPDATE_CATEGORIES = frozenset(MVP_UPDATE_CATEGORIES)
+EKARTOTEKA_TIMEZONE = ZoneInfo("Europe/Warsaw")
 
 
 class EkartotekaResult(BaseModel):
@@ -35,6 +41,26 @@ class CurrentFeeComponents(BaseModel):
     premises: Premises
     period: FeePeriod
     items: list[MonthlyFeeItem]
+
+
+class SettlementSnapshot(BaseModel):
+    """Flat e-Kartoteka category-data record for the MVP account set."""
+
+    year: int
+    account_204_credit: float | None
+    account_204_debit: float | None
+    account_204_balance: float | None
+    account_206_credit: float | None
+    account_206_debit: float | None
+    account_206_balance: float | None
+    account_210_credit: float | None
+    account_210_debit: float | None
+    account_210_balance: float | None
+    update_dk_at: datetime | None
+    update_dkl_at: datetime | None
+    update_li_at: datetime | None
+    update_nrb_at: datetime | None
+    update_nl_at: datetime | None
 
 
 class Ekartoteka:
@@ -71,26 +97,105 @@ class Ekartoteka:
         """Return the current gross monthly fee total."""
         return self.api.get_current_fee_total().gross_amount
 
+    def get_obligation_amount_from_settlements(self, on: date) -> Decimal:
+        """Return the month's payable total from the settlement ledgers.
+
+        ``Mc`` in e-Kartoteka's annual ledger is zero-indexed (January is 0).
+        We include the three accounts represented by the category-data schema:
+        owner settlements (204), renovation fund (206), and interest (210).
+
+        Args:
+            on: Month of the target Oblidog obligation.
+
+        Returns:
+            Sum of ``DoZaplaty`` for the matching month in accounts 204, 206,
+            and 210. Payments and running balances are deliberately excluded.
+        """
+        month_index = on.month - 1
+        accounts = {
+            account.symbol: account
+            for account in self.api.get_settlements(on.year).results
+            if account.symbol in MVP_ACCOUNT_SYMBOLS
+        }
+        return sum(
+            (
+                entry.amount_due
+                for account in accounts.values()
+                for entry in self.api.get_annual_ledger(account.id)
+                if entry.month == month_index
+            ),
+            Decimal(0),
+        )
+
     def get_update_stamp(self) -> dict[str, datetime]:
         """Return dates for categories relevant to payment-status rules."""
-        monitored_categories = {"DK", "DKL", "SRC", "LI", "NL", "NRB", "STL"}
         return {
             item.category: datetime.combine(
                 item.updated_at.date(), datetime.min.time(), tzinfo=UTC
             )
             for item in self.api.get_update_dates().results
-            if item.category in monitored_categories and item.updated_at is not None
+            if item.category in MONITORED_UPDATE_CATEGORIES
+            and item.updated_at is not None
         }
 
-    def get_current_fee_components(self) -> list[CurrentFeeComponents]:
-        """Return itemized charges for every premises with an active period."""
+    def get_settlement_snapshot(self, year: int) -> SettlementSnapshot:
+        """Fetch a flat snapshot suitable for category-data charts.
+
+        Account symbols are the MVP schema contract; an unavailable account is
+        represented by ``null`` rather than changing the record shape.
+
+        Args:
+            year: Settlement year to fetch from e-Kartoteka.
+
+        Returns:
+            A schema-stable flat snapshot of account values and update dates.
+        """
+        accounts = {
+            item.symbol: item for item in self.api.get_settlements(year).results
+        }
+        update_dates = {
+            item.category: self._as_ekartoteka_timestamp(item.updated_at)
+            for item in self.api.get_update_dates().results
+            if item.category in MONITORED_UPDATE_CATEGORIES
+            and item.updated_at is not None
+        }
+
+        snapshot: dict[str, int | Decimal | datetime | None] = {"year": year}
+        for symbol in MVP_ACCOUNT_SYMBOLS:
+            account = accounts.get(symbol)
+            prefix = f"account_{symbol}"
+            snapshot[f"{prefix}_credit"] = account.credit if account else None
+            snapshot[f"{prefix}_debit"] = account.debit if account else None
+            snapshot[f"{prefix}_balance"] = account.balance if account else None
+        for category in MVP_UPDATE_CATEGORIES:
+            snapshot[f"update_{category.lower()}_at"] = update_dates.get(category)
+
+        return SettlementSnapshot.model_validate(snapshot)
+
+    @staticmethod
+    def _as_ekartoteka_timestamp(value: datetime) -> datetime:
+        """Interpret timezone-naive provider timestamps as Europe/Warsaw time."""
+        return (
+            value.replace(tzinfo=EKARTOTEKA_TIMEZONE) if value.tzinfo is None else value
+        )
+
+    def get_current_fee_components(self, on: date) -> list[CurrentFeeComponents]:
+        """Return charges due in ``on``'s month from the prior fee period.
+
+        Args:
+            on: Month of the target Oblidog obligation.
+
+        Returns:
+            Fee-period metadata and itemized charges for each matching premises.
+        """
+        fee_period_start = self._fee_period_start_for_obligation(on)
         components = []
         for premises in self.api.get_premises().results:
             period = next(
                 (
                     candidate
                     for candidate in self.api.get_fee_periods(premises.id).results
-                    if candidate.ends_on is None
+                    if candidate.starts_on == fee_period_start
                 ),
                 None,
             )
@@ -108,6 +213,27 @@ class Ekartoteka:
                 )
             )
         return components
+
+    def has_current_fee_period(self, on: date) -> bool:
+        """Return whether e-Kartoteka published fees due in ``on``'s month.
+
+        Args:
+            on: Month of the target Oblidog obligation.
+
+        Returns:
+            ``True`` when at least one premises has the matching source period.
+        """
+        fee_period_start = self._fee_period_start_for_obligation(on)
+        for premises in self.api.get_premises().results:
+            for period in self.api.get_fee_periods(premises.id).results:
+                if period.starts_on == fee_period_start:
+                    return True
+        return False
+
+    @staticmethod
+    def _fee_period_start_for_obligation(on: date) -> date:
+        """Map an obligation month to e-Kartoteka's preceding fee period."""
+        return (on.replace(day=1) - timedelta(days=1)).replace(day=1)
 
     def get_payment_status(self) -> EkartotekaResult:
         """Aggregate the current monthly fee and settlement state."""
@@ -142,4 +268,5 @@ __all__ = [
     "EkartotekaError",
     "EkartotekaResult",
     "NotInitializedError",
+    "SettlementSnapshot",
 ]

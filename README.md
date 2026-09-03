@@ -33,13 +33,25 @@ The same common commands are available through `make`:
 make sync
 make check
 make run-ekartoteka
+make print-ekartoteka-schema
 ```
+
+`make print-ekartoteka-schema` prints the JSON Schema for the flat e-Kartoteka
+category-data record. Paste it into the category-schema import in Findog Ledger.
 
 Before running e-Kartoteka for the first time, prepare its local configuration:
 
 ```bash
 cp .env.ekartoteka.example .env.ekartoteka
 ```
+
+Set `EKARTOTEKA_USERNAME`, `EKARTOTEKA_PASSWORD`, `OBLIDOG_URL`,
+`OBLIDOG_API_KEY`, and `OBLIDOG_CATEGORY_CODE` in that file. Running
+`make run-ekartoteka` prints and creates a category-data observation containing
+the e-Kartoteka settlement snapshot.
+
+Logs use a readable console format by default. Set `OBLIDOG_LOG_FORMAT=json`
+to emit one JSON object per log event for systemd or a log collector.
 
 Run the proof-of-concept integration with:
 

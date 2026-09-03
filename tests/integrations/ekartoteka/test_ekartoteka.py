@@ -1,14 +1,34 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Self
 
+from findog_client import ObligationLifecycle
+from findog_client.generated.errors import UnexpectedStatus
+
+from oblidog_integrations.integrations.ekartoteka import sync
 from oblidog_integrations.integrations.ekartoteka.api import EkartotekaApi
+from oblidog_integrations.integrations.ekartoteka.category_data import (
+    export_snapshot,
+)
+from oblidog_integrations.integrations.ekartoteka.components import (
+    sync_fee_components,
+)
 from oblidog_integrations.integrations.ekartoteka.ekartoteka import Ekartoteka
 from oblidog_integrations.integrations.ekartoteka.models import (
+    AnnualLedgerEntry,
     FeePeriodsPage,
     MonthlyFeeItemsPage,
     PremisesPage,
     SettlementAccountsPage,
     UpdateDatesPage,
+)
+from oblidog_integrations.integrations.ekartoteka.obligations import (
+    mark_error_when_current_fee_period_is_missing,
+    populate_obligation_when_fee_period_is_available,
+)
+from oblidog_integrations.integrations.ekartoteka.schema import (
+    settlement_snapshot_schema,
 )
 
 
@@ -117,6 +137,86 @@ class FakeComponentsApi:
             }
         )
 
+    def get_settlements(self, year: int) -> SettlementAccountsPage:
+        return FakeSnapshotApi().get_settlements(year)
+
+    def get_annual_ledger(self, account_id: int) -> list[object]:
+        return FakeSnapshotApi().get_annual_ledger(account_id)
+
+
+class FakeSnapshotApi:
+    def get_settlements(self, year: int) -> SettlementAccountsPage:
+        assert year == 2026
+        return SettlementAccountsPage.model_validate(
+            {
+                "count": 2,
+                "next": None,
+                "previous": None,
+                "results": [
+                    {
+                        "IdKon": 1,
+                        "Rok": 2026,
+                        "Symbol": "204",
+                        "Nazwa": "Rozrachunki z właścicielami",
+                        "Ma": 10,
+                        "Wn": 20,
+                        "s": 10,
+                    },
+                    {
+                        "IdKon": 2,
+                        "Rok": 2026,
+                        "Symbol": "206",
+                        "Nazwa": "Fundusz remontowy",
+                        "Ma": 30,
+                        "Wn": 40,
+                        "s": 10,
+                    },
+                ],
+            }
+        )
+
+    def get_update_dates(self) -> UpdateDatesPage:
+        return UpdateDatesPage.model_validate(
+            {
+                "count": 2,
+                "next": None,
+                "previous": None,
+                "results": [
+                    {"typ": "LI", "data": "2026-09-01T08:20:03.316000"},
+                    {"typ": "UNUSED", "data": None},
+                ],
+            }
+        )
+
+    def get_annual_ledger(self, account_id: int) -> list[object]:
+        annual_ledger = {
+            1: [
+                {
+                    "DoZaplaty": 100,
+                    "Zaplacono": 0,
+                    "Mc": 9,
+                    "Nadplata": 0,
+                    "Zaleglosc": 0,
+                    "islimitMonths": 0,
+                    "s": 0,
+                }
+            ],
+            2: [
+                {
+                    "DoZaplaty": 20,
+                    "Zaplacono": 0,
+                    "Mc": 9,
+                    "Nadplata": 0,
+                    "Zaleglosc": 0,
+                    "islimitMonths": 0,
+                    "s": 0,
+                }
+            ],
+        }
+        return [
+            AnnualLedgerEntry.model_validate(item) for item in annual_ledger[account_id]
+        ]
+
 
 def test_payment_status_marks_positive_balance_as_unpaid() -> None:
     client = FakeEkartoteka(
@@ -165,6 +265,14 @@ def test_settlement_response_has_pythonic_pydantic_fields() -> None:
     assert account.id == 1540355
     assert account.credit == Decimal("4803.6")
     assert account.model_dump(by_alias=True)["Nazwa"] == account.name
+
+
+def test_obligation_amount_comes_from_monthly_settlement_ledgers() -> None:
+    client = Ekartoteka(api=FakeSnapshotApi())  # type: ignore[arg-type]
+
+    amount = client.get_obligation_amount_from_settlements(date(2026, 10, 3))
+
+    assert amount == Decimal(120)
 
 
 def test_fee_models_parse_dates_and_monetary_items() -> None:
@@ -243,9 +351,321 @@ def test_update_date_model_accepts_timestamps_and_missing_dates() -> None:
 def test_current_fee_components_uses_the_active_period() -> None:
     client = Ekartoteka(api=FakeComponentsApi())  # type: ignore[arg-type]
 
-    components = client.get_current_fee_components()
+    components = client.get_current_fee_components(date(2026, 10, 3))
 
     assert len(components) == 1
     assert components[0].premises.code == "A-10"
     assert components[0].period.charge_id == 20
     assert components[0].items[0].name == "Czynsz"
+
+
+def test_current_fee_period_uses_the_preceding_fee_period() -> None:
+    client = Ekartoteka(api=FakeComponentsApi())  # type: ignore[arg-type]
+
+    assert client.has_current_fee_period(date(2026, 10, 3))
+    assert client.has_current_fee_period(date(2026, 9, 3))
+    assert not client.has_current_fee_period(date(2026, 8, 3))
+
+
+def test_settlement_snapshot_has_a_stable_flat_shape() -> None:
+    client = Ekartoteka(api=FakeSnapshotApi())  # type: ignore[arg-type]
+
+    snapshot = client.get_settlement_snapshot(2026)
+
+    assert snapshot.year == 2026
+    assert snapshot.account_204_credit == 10.0
+    assert snapshot.account_206_debit == 40.0
+    assert snapshot.account_210_balance is None
+    assert snapshot.update_li_at.isoformat() == "2026-09-01T08:20:03.316000+02:00"
+    assert snapshot.update_dk_at is None
+    assert set(snapshot.model_dump()) == {
+        "year",
+        "account_204_credit",
+        "account_204_debit",
+        "account_204_balance",
+        "account_206_credit",
+        "account_206_debit",
+        "account_206_balance",
+        "account_210_credit",
+        "account_210_debit",
+        "account_210_balance",
+        "update_dk_at",
+        "update_dkl_at",
+        "update_li_at",
+        "update_nrb_at",
+        "update_nl_at",
+    }
+
+
+def test_settlement_snapshot_schema_matches_the_flat_snapshot() -> None:
+    schema = settlement_snapshot_schema()
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == list(schema["properties"])
+    assert schema["properties"]["account_204_balance"]["anyOf"] == [
+        {"type": "number"},
+        {"type": "null"},
+    ]
+    assert (
+        schema["properties"]["account_204_balance"]["title"]
+        == "Rozrachunki z właścicielami — Saldo"
+    )
+    assert schema["properties"]["update_li_at"]["anyOf"] == [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"},
+    ]
+
+
+def test_run_exports_the_snapshot_as_category_data(monkeypatch) -> None:
+    snapshot = Ekartoteka(api=FakeSnapshotApi()).get_settlement_snapshot(2026)  # type: ignore[arg-type]
+    captured: dict[str, object] = {}
+
+    class FakeSyncEkartoteka:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def login(self) -> None:
+            pass
+
+        def get_settlement_snapshot(self, year: int):
+            assert year == datetime.now(UTC).year
+            return snapshot
+
+        def has_current_fee_period(self, on: date) -> bool:
+            assert on == datetime.now(UTC).date()
+            return True
+
+        def get_current_fee_components(self, on: date) -> list[object]:
+            assert on in {
+                datetime.now(UTC).date(),
+                datetime.now(UTC).date().replace(day=1) - timedelta(days=1),
+            }
+            return []
+
+    class FakeFindogClient:
+        def __init__(self, *, base_url: str, api_key: str) -> None:
+            captured["base_url"] = base_url
+            captured["api_key"] = api_key
+            self.category_data = self
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def create(self, category_code: str, **kwargs: object) -> None:
+            captured["category_code"] = category_code
+            captured.update(kwargs)
+
+        def latest(self, _: str) -> object:
+            raise UnexpectedStatus(404, b"")
+
+    monkeypatch.setattr(sync, "Ekartoteka", FakeSyncEkartoteka)
+    monkeypatch.setattr(sync, "FindogClient", FakeFindogClient)
+    monkeypatch.setenv("EKARTOTEKA_USERNAME", "user")
+    monkeypatch.setenv("EKARTOTEKA_PASSWORD", "password")
+    monkeypatch.setenv("OBLIDOG_URL", "https://oblidog.example.com")
+    monkeypatch.setenv("OBLIDOG_API_KEY", "api-key")
+    monkeypatch.setenv("OBLIDOG_CATEGORY_CODE", "FLAT")
+
+    sync.run()
+
+    assert captured["category_code"] == "FLAT"
+    assert captured["source"] == "ekartoteka"
+    assert captured["data"] == snapshot.model_dump(mode="json")
+    assert isinstance(captured["observed_at"], datetime)
+
+
+def test_fee_components_are_upserted_with_provider_metadata() -> None:
+    upserts: list[dict[str, object]] = []
+    findog = SimpleNamespace(
+        obligations=SimpleNamespace(
+            upsert_component=lambda obligation_key, **kwargs: upserts.append(
+                {"obligation_key": obligation_key, **kwargs}
+            )
+        )
+    )
+
+    result = sync_fee_components(
+        ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
+        findog=findog,
+        category_code="FLAT",
+        on=date(2026, 10, 3),
+    )
+
+    assert result.obligation_key == "FLAT-2026-10"
+    assert result.upserted_count == 1
+    assert upserts == [
+        {
+            "obligation_key": "FLAT-2026-10",
+            "type": "monthly_fee",
+            "label": "Czynsz",
+            "amount": "10",
+            "source": "ekartoteka",
+            "external_id": "10:20:0",
+            "metadata": {
+                "premises": {"id": 10, "code": "A-10", "address": "Testowa 10"},
+                "period": {
+                    "starts_on": "2026-09-01",
+                    "ends_on": None,
+                    "status": "ok",
+                    "charge_id": 20,
+                    "premises_id": 10,
+                    "header": None,
+                    "footer": None,
+                    "type": "B",
+                },
+                "fee": {
+                    "quantity_factor": "1",
+                    "quantity_factor_unit": None,
+                    "unit_price": "10",
+                    "price_factor": "1",
+                    "amount": "10",
+                    "is_subitem": False,
+                    "name": "Czynsz",
+                    "quantity": "1",
+                    "unit": "mc",
+                    "period_description": "",
+                },
+            },
+        }
+    ]
+
+
+def test_published_fees_populate_and_ready_draft_or_collecting_obligation() -> None:
+    for lifecycle in (
+        ObligationLifecycle.DRAFT,
+        ObligationLifecycle.COLLECTING_DATA,
+    ):
+        updates: list[dict[str, object]] = []
+        marked_ready: list[str] = []
+        obligations = SimpleNamespace(
+            get=lambda key, lifecycle=lifecycle: SimpleNamespace(
+                key=key, lifecycle=lifecycle
+            ),
+            update=lambda key, updates=updates, **kwargs: updates.append(
+                {"obligation_key": key, **kwargs}
+            ),
+            mark_ready=marked_ready.append,
+        )
+        findog = SimpleNamespace(obligations=obligations)
+
+        result = populate_obligation_when_fee_period_is_available(
+            ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
+            findog=findog,
+            category_code="FLAT",
+            on=date(2026, 10, 3),
+        )
+
+        assert result.updated
+        assert result.current_amount == Decimal(120)
+        assert result.issue_date == date(2026, 9, 1)
+        assert result.due_date == date(2026, 10, 15)
+        assert updates == [
+            {
+                "obligation_key": "FLAT-2026-10",
+                "current_amount": "120",
+                "issue_date": date(2026, 9, 1),
+                "due_date": date(2026, 10, 15),
+            }
+        ]
+        assert marked_ready == ["FLAT-2026-10"]
+
+
+def test_published_fees_do_not_overwrite_ready_obligation() -> None:
+    updates: list[dict[str, object]] = []
+    marked_ready: list[str] = []
+    obligations = SimpleNamespace(
+        get=lambda key: SimpleNamespace(key=key, lifecycle=ObligationLifecycle.READY),
+        update=lambda key, **kwargs: updates.append({"obligation_key": key, **kwargs}),
+        mark_ready=marked_ready.append,
+    )
+    findog = SimpleNamespace(obligations=obligations)
+
+    result = populate_obligation_when_fee_period_is_available(
+        ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
+        findog=findog,
+        category_code="FLAT",
+        on=date(2026, 10, 3),
+    )
+
+    assert result.fee_period_available
+    assert not result.updated
+    assert result.lifecycle is ObligationLifecycle.READY
+    assert not updates
+    assert not marked_ready
+
+
+def test_snapshot_identical_to_latest_category_data_is_not_exported() -> None:
+    snapshot = Ekartoteka(api=FakeSnapshotApi()).get_settlement_snapshot(2026)  # type: ignore[arg-type]
+    created: list[dict[str, object]] = []
+    category_data = SimpleNamespace(
+        latest=lambda _: SimpleNamespace(
+            data=SimpleNamespace(to_dict=lambda: snapshot.model_dump(mode="json"))
+        ),
+        create=lambda _, **kwargs: created.append(kwargs),
+    )
+    findog = SimpleNamespace(category_data=category_data)
+
+    result = export_snapshot(
+        ekartoteka=Ekartoteka(api=FakeSnapshotApi()),  # type: ignore[arg-type]
+        findog=findog,
+        category_code="FLAT",
+        year=2026,
+    )
+
+    assert result.snapshot == snapshot
+    assert not result.created
+    assert not created
+
+
+def test_missing_fee_period_marks_non_collecting_obligation_as_error() -> None:
+    marked_as_error: list[str] = []
+    obligations = SimpleNamespace(
+        get=lambda key: SimpleNamespace(
+            key=key,
+            lifecycle=ObligationLifecycle.READY,
+        ),
+        mark_error=marked_as_error.append,
+    )
+    findog = SimpleNamespace(obligations=obligations)
+    ekartoteka = SimpleNamespace(has_current_fee_period=lambda _: False)
+
+    result = mark_error_when_current_fee_period_is_missing(
+        ekartoteka=ekartoteka,
+        findog=findog,
+        category_code="FLAT",
+        on=date(2026, 9, 3),
+    )
+
+    assert result.marked_as_error
+    assert not result.fee_period_available
+    assert result.lifecycle is ObligationLifecycle.READY
+    assert marked_as_error == ["FLAT-2026-09"]
+
+
+def test_missing_fee_period_keeps_collecting_obligation_unchanged() -> None:
+    marked_as_error: list[str] = []
+    obligations = SimpleNamespace(
+        get=lambda key: SimpleNamespace(
+            key=key,
+            lifecycle=ObligationLifecycle.COLLECTING_DATA,
+        ),
+        mark_error=marked_as_error.append,
+    )
+    findog = SimpleNamespace(obligations=obligations)
+    ekartoteka = SimpleNamespace(has_current_fee_period=lambda _: False)
+
+    result = mark_error_when_current_fee_period_is_missing(
+        ekartoteka=ekartoteka,
+        findog=findog,
+        category_code="FLAT",
+        on=date(2026, 9, 3),
+    )
+
+    assert not result.marked_as_error
+    assert not result.fee_period_available
+    assert result.lifecycle is ObligationLifecycle.COLLECTING_DATA
+    assert not marked_as_error

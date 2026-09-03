@@ -7,3 +7,4 @@ __pycache__/
 .env.*
 !.env.*.example
 src/oblidog_integrations/integrations/ekartoteka/reverse/
+shema.json
