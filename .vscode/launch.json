@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "e-Kartoteka",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "oblidog_integrations.cli",
+      "args": ["ekartoteka"],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env.ekartoteka",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}

@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "findog-client-python @ git+https://github.com/oblidog/oblidog-client-python.git",
+  "pydantic>=2.0",
+  "structlog>=25.0",
 ]
 
 [project.scripts]
@@ -34,3 +36,6 @@ line-length = 88
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = [
+  "ekartoteka_e2e: read-only tests against the live e-Kartoteka API",
+]
