@@ -90,6 +90,24 @@ class EkartotekaApi:
                 f"Invalid {response_name} response from e-Kartoteka"
             ) from error
 
+    def _get_paginated(
+        self, model: type[BaseModel], url: str, response_name: str
+    ) -> Any:
+        """Fetch every page in an e-Kartoteka paginated response."""
+        page = self._parse(model, self._request_json(url), response_name)
+        results = list(page.results)
+        while page.next is not None:
+            page = self._parse(model, self._request_json(page.next), response_name)
+            results.extend(page.results)
+        return page.model_copy(
+            update={
+                "count": len(results),
+                "next": None,
+                "previous": None,
+                "results": results,
+            }
+        )
+
     def _decode_client_id(self) -> int:
         if self.token is None:
             raise NotInitializedError("No token received from e-Kartoteka")
@@ -149,9 +167,9 @@ class EkartotekaApi:
 
     def get_settlements(self, year: int) -> SettlementAccountsPage:
         user_id, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             SettlementAccountsPage,
-            self._request_json(self.URL_SETTLEMENTS.format(user_id, client_id, year)),
+            self.URL_SETTLEMENTS.format(user_id, client_id, year),
             "settlements",
         )
 
@@ -171,29 +189,25 @@ class EkartotekaApi:
 
     def get_premises(self) -> PremisesPage:
         user_id, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             PremisesPage,
-            self._request_json(self.URL_PREMISES.format(user_id, client_id)),
+            self.URL_PREMISES.format(user_id, client_id),
             "premises",
         )
 
     def get_fee_periods(self, premises_id: int) -> FeePeriodsPage:
         user_id, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             FeePeriodsPage,
-            self._request_json(
-                self.URL_FEE_PERIODS.format(user_id, client_id, premises_id)
-            ),
+            self.URL_FEE_PERIODS.format(user_id, client_id, premises_id),
             "fee-periods",
         )
 
     def get_bank_accounts(self, premises_id: int) -> BankAccountsPage:
         user_id, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             BankAccountsPage,
-            self._request_json(
-                self.URL_BANK_ACCOUNTS.format(user_id, client_id, premises_id)
-            ),
+            self.URL_BANK_ACCOUNTS.format(user_id, client_id, premises_id),
             "bank-accounts",
         )
 
@@ -201,11 +215,9 @@ class EkartotekaApi:
         self, *, charge_id: int, premises_id: int
     ) -> MonthlyFeeItemsPage:
         _, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             MonthlyFeeItemsPage,
-            self._request_json(
-                self.URL_MONTHLY_FEE_ITEMS.format(charge_id, premises_id, client_id)
-            ),
+            self.URL_MONTHLY_FEE_ITEMS.format(charge_id, premises_id, client_id),
             "monthly-fee-items",
         )
 
@@ -221,8 +233,8 @@ class EkartotekaApi:
 
     def get_update_dates(self) -> UpdateDatesPage:
         user_id, client_id = self._require_login()
-        return self._parse(
+        return self._get_paginated(
             UpdateDatesPage,
-            self._request_json(self.URL_UPDATE_DATES.format(user_id, client_id)),
+            self.URL_UPDATE_DATES.format(user_id, client_id),
             "update-date",
         )

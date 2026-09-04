@@ -43,6 +43,10 @@ class CurrentFeeComponents(BaseModel):
     items: list[MonthlyFeeItem]
 
 
+class IncompleteSettlementDataError(EkartotekaError):
+    """Raised when the ledger cannot calculate a complete obligation amount."""
+
+
 class SettlementSnapshot(BaseModel):
     """Flat e-Kartoteka category-data record for the MVP account set."""
 
@@ -117,15 +121,26 @@ class Ekartoteka:
             for account in self.api.get_settlements(on.year).results
             if account.symbol in MVP_ACCOUNT_SYMBOLS
         }
-        return sum(
-            (
+        missing_accounts = set(MVP_ACCOUNT_SYMBOLS) - accounts.keys()
+        if missing_accounts:
+            raise IncompleteSettlementDataError(
+                "Missing settlement accounts needed to calculate obligation amount: "
+                + ", ".join(sorted(missing_accounts))
+            )
+
+        amounts = []
+        for symbol in MVP_ACCOUNT_SYMBOLS:
+            matching_entries = [
                 entry.amount_due
-                for account in accounts.values()
-                for entry in self.api.get_annual_ledger(account.id)
+                for entry in self.api.get_annual_ledger(accounts[symbol].id)
                 if entry.month == month_index
-            ),
-            Decimal(0),
-        )
+            ]
+            if not matching_entries:
+                raise IncompleteSettlementDataError(
+                    f"Missing month {on.month} in settlement ledger for account {symbol}"
+                )
+            amounts.extend(matching_entries)
+        return sum(amounts, Decimal(0))
 
     def get_update_stamp(self) -> dict[str, datetime]:
         """Return dates for categories relevant to payment-status rules."""
@@ -267,6 +282,7 @@ __all__ = [
     "Ekartoteka",
     "EkartotekaError",
     "EkartotekaResult",
+    "IncompleteSettlementDataError",
     "NotInitializedError",
     "SettlementSnapshot",
 ]

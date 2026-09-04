@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Self
 
+import pytest
 from findog_client import ObligationLifecycle
 from findog_client.generated.errors import UnexpectedStatus
 
@@ -14,12 +15,16 @@ from oblidog_integrations.integrations.ekartoteka.category_data import (
 from oblidog_integrations.integrations.ekartoteka.components import (
     sync_fee_components,
 )
-from oblidog_integrations.integrations.ekartoteka.ekartoteka import Ekartoteka
+from oblidog_integrations.integrations.ekartoteka.ekartoteka import (
+    Ekartoteka,
+    IncompleteSettlementDataError,
+)
 from oblidog_integrations.integrations.ekartoteka.models import (
     AnnualLedgerEntry,
     FeePeriodsPage,
     MonthlyFeeItemsPage,
     PremisesPage,
+    SettlementAccount,
     SettlementAccountsPage,
     UpdateDatesPage,
 )
@@ -138,10 +143,10 @@ class FakeComponentsApi:
         )
 
     def get_settlements(self, year: int) -> SettlementAccountsPage:
-        return FakeSnapshotApi().get_settlements(year)
+        return FakeCompleteSnapshotApi().get_settlements(year)
 
     def get_annual_ledger(self, account_id: int) -> list[object]:
-        return FakeSnapshotApi().get_annual_ledger(account_id)
+        return FakeCompleteSnapshotApi().get_annual_ledger(account_id)
 
 
 class FakeSnapshotApi:
@@ -218,6 +223,49 @@ class FakeSnapshotApi:
         ]
 
 
+class FakeCompleteSnapshotApi(FakeSnapshotApi):
+    """Settlement fixture containing every account required for obligations."""
+
+    def get_settlements(self, year: int) -> SettlementAccountsPage:
+        page = super().get_settlements(year)
+        return page.model_copy(
+            update={
+                "count": 3,
+                "results": [
+                    *page.results,
+                    SettlementAccount.model_validate(
+                        {
+                            "IdKon": 3,
+                            "Rok": 2026,
+                            "Symbol": "210",
+                            "Nazwa": "Odsetki",
+                            "Ma": 0,
+                            "Wn": 0,
+                            "s": 0,
+                        }
+                    ),
+                ],
+            }
+        )
+
+    def get_annual_ledger(self, account_id: int) -> list[object]:
+        if account_id == 3:
+            return [
+                AnnualLedgerEntry.model_validate(
+                    {
+                        "DoZaplaty": 0,
+                        "Zaplacono": 0,
+                        "Mc": 9,
+                        "Nadplata": 0,
+                        "Zaleglosc": 0,
+                        "islimitMonths": 0,
+                        "s": 0,
+                    }
+                )
+            ]
+        return super().get_annual_ledger(account_id)
+
+
 def test_payment_status_marks_positive_balance_as_unpaid() -> None:
     client = FakeEkartoteka(
         delta=Decimal("10.0"),
@@ -268,11 +316,63 @@ def test_settlement_response_has_pythonic_pydantic_fields() -> None:
 
 
 def test_obligation_amount_comes_from_monthly_settlement_ledgers() -> None:
-    client = Ekartoteka(api=FakeSnapshotApi())  # type: ignore[arg-type]
+    client = Ekartoteka(api=FakeCompleteSnapshotApi())  # type: ignore[arg-type]
 
     amount = client.get_obligation_amount_from_settlements(date(2026, 10, 3))
 
     assert amount == Decimal(120)
+
+
+def test_obligation_amount_requires_every_settlement_account() -> None:
+    client = Ekartoteka(api=FakeSnapshotApi())  # type: ignore[arg-type]
+
+    with pytest.raises(IncompleteSettlementDataError, match="210"):
+        client.get_obligation_amount_from_settlements(date(2026, 10, 3))
+
+
+def test_obligation_amount_requires_the_target_month_in_every_ledger() -> None:
+    class MissingMonthApi(FakeCompleteSnapshotApi):
+        def get_annual_ledger(self, account_id: int) -> list[object]:
+            return [] if account_id == 3 else super().get_annual_ledger(account_id)
+
+    client = Ekartoteka(api=MissingMonthApi())  # type: ignore[arg-type]
+
+    with pytest.raises(IncompleteSettlementDataError, match="account 210"):
+        client.get_obligation_amount_from_settlements(date(2026, 10, 3))
+
+
+def test_incomplete_settlements_do_not_update_or_ready_an_obligation() -> None:
+    class IncompleteComponentsApi(FakeComponentsApi):
+        def get_settlements(self, year: int) -> SettlementAccountsPage:
+            return FakeSnapshotApi().get_settlements(year)
+
+        def get_annual_ledger(self, account_id: int) -> list[object]:
+            return FakeSnapshotApi().get_annual_ledger(account_id)
+
+    updates: list[dict[str, object]] = []
+    marked_ready: list[str] = []
+    findog = SimpleNamespace(
+        obligations=SimpleNamespace(
+            get=lambda key: SimpleNamespace(
+                key=key, lifecycle=ObligationLifecycle.COLLECTING_DATA
+            ),
+            update=lambda key, **kwargs: updates.append(
+                {"obligation_key": key, **kwargs}
+            ),
+            mark_ready=marked_ready.append,
+        )
+    )
+
+    with pytest.raises(IncompleteSettlementDataError):
+        populate_obligation_when_fee_period_is_available(
+            ekartoteka=Ekartoteka(api=IncompleteComponentsApi()),  # type: ignore[arg-type]
+            findog=findog,
+            category_code="FLAT",
+            on=date(2026, 10, 3),
+        )
+
+    assert not updates
+    assert not marked_ready
 
 
 def test_fee_models_parse_dates_and_monetary_items() -> None:
@@ -329,6 +429,38 @@ def test_low_level_client_returns_pydantic_models() -> None:
 
     assert user.accounting_id == 7
     assert settlements == SettlementAccountsPage(count=0, results=[])
+
+
+def test_low_level_client_fetches_every_page() -> None:
+    class PaginatedApi(FakeEkartotekaApi):
+        def _request_json(
+            self, url: str, *, payload: dict[str, str] | None = None
+        ) -> object:
+            if url == "https://e-kartoteka.test/premises/2":
+                return {
+                    "count": 2,
+                    "next": None,
+                    "previous": "https://e-kartoteka.test/premises/1",
+                    "results": [{"IdLok": 11, "kod": "A-11", "adres": "Testowa 11"}],
+                }
+            return {
+                "count": 2,
+                "next": "https://e-kartoteka.test/premises/2",
+                "previous": None,
+                "results": [{"IdLok": 10, "kod": "A-10", "adres": "Testowa 10"}],
+            }
+
+    api = PaginatedApi({})
+    api._logged_in = True
+    api.token = "token"
+    api.client_id = 42
+    api.user = SimpleNamespace(accounting_id=7)  # type: ignore[assignment]
+
+    premises = api.get_premises()
+
+    assert premises.count == 2
+    assert premises.next is None
+    assert [premises.id for premises in premises.results] == [10, 11]
 
 
 def test_update_date_model_accepts_timestamps_and_missing_dates() -> None:

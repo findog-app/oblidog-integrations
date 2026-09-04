@@ -17,6 +17,7 @@ from oblidog_integrations.integrations.ekartoteka.ekartoteka import (
     CurrentFeeComponents,
     Ekartoteka,
     EkartotekaResult,
+    IncompleteSettlementDataError,
     SettlementSnapshot,
 )
 from oblidog_integrations.integrations.ekartoteka.models import (
@@ -60,6 +61,7 @@ __all__ = [
     "FeeComponentsSyncResult",
     "FeePeriod",
     "FeePeriodsPage",
+    "IncompleteSettlementDataError",
     "MonthlyFeeItem",
     "MonthlyFeeItemsPage",
     "NotInitializedError",

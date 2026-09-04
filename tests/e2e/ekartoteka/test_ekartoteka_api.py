@@ -7,6 +7,8 @@ Run with ``make test-e2e-ekartoteka``.  The target loads the untracked
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -31,7 +33,9 @@ def test_fetches_active_fee_components(credentials: dict[str, str]) -> None:
     client = Ekartoteka(api=api)
 
     client.login()
-    components = client.get_current_fee_components()
+    components = client.get_current_fee_components(
+        datetime.now(ZoneInfo("Europe/Warsaw")).date()
+    )
 
     assert api.user is not None
     assert components
