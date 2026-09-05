@@ -35,12 +35,18 @@ def _required_env(name: str) -> str:
     return value
 
 
-def _has_current_values(obligation: Any, *, total: Decimal, due_date: date) -> bool:
+def _has_current_values(
+    obligation: Any, *, total: Decimal, issue_date: date, due_date: date
+) -> bool:
     try:
         current_amount = Decimal(str(obligation.current_amount))
     except (InvalidOperation, ValueError):
         return False
-    return current_amount == total and obligation.due_date == due_date
+    return (
+        current_amount == total
+        and obligation.issue_date == issue_date
+        and obligation.due_date == due_date
+    )
 
 
 def _reconcile_obligation(
@@ -48,11 +54,14 @@ def _reconcile_obligation(
     obligations: Any,
     obligation: Any,
     total: Decimal,
+    issue_date: date,
     due_date: date,
     paid: bool,
 ) -> bool:
     """Apply NJU data while respecting Oblidog's obligation lifecycle."""
-    values_current = _has_current_values(obligation, total=total, due_date=due_date)
+    values_current = _has_current_values(
+        obligation, total=total, issue_date=issue_date, due_date=due_date
+    )
     lifecycle = obligation.lifecycle
     target_lifecycle = ObligationLifecycle.PAID if paid else ObligationLifecycle.READY
 
@@ -64,6 +73,7 @@ def _reconcile_obligation(
             obligations.update(
                 obligation.key,
                 current_amount=str(total),
+                issue_date=issue_date,
                 due_date=due_date,
             )
     elif lifecycle in _EDITABLE_LIFECYCLES:
@@ -71,6 +81,7 @@ def _reconcile_obligation(
             obligations.update(
                 obligation.key,
                 current_amount=str(total),
+                issue_date=issue_date,
                 due_date=due_date,
             )
     else:
@@ -122,12 +133,14 @@ def run() -> None:
             )
         obligation = obligations.data[0]
         total = sum((invoice.total_amount for invoice in invoices), start=0)
+        issue_date = min(invoice.issue_date for invoice in invoices)
         due_date = min(invoice.due_date for invoice in invoices)
         paid = all(invoice.is_paid for invoice in invoices)
         changed = _reconcile_obligation(
             obligations=oblidog.obligations,
             obligation=obligation,
             total=total,
+            issue_date=issue_date,
             due_date=due_date,
             paid=paid,
         )
@@ -138,6 +151,7 @@ def run() -> None:
         obligation_key=obligation.key,
         invoice_count=len(invoices),
         current_amount=str(total),
+        issue_date=issue_date.isoformat(),
         due_date=due_date.isoformat(),
         paid=paid,
         changed=changed,

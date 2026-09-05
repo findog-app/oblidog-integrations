@@ -92,6 +92,7 @@ def test_run_updates_and_readies_an_unpaid_current_invoice(monkeypatch) -> None:
                     key="NJU-2026-09",
                     lifecycle=ObligationLifecycle.COLLECTING_DATA,
                     current_amount=None,
+                    issue_date=None,
                     due_date=None,
                 )
             ],
@@ -133,6 +134,7 @@ def test_run_updates_and_readies_an_unpaid_current_invoice(monkeypatch) -> None:
         {
             "key": "NJU-2026-09",
             "current_amount": "12.34",
+            "issue_date": now.date(),
             "due_date": date(now.year, now.month, 15),
         }
     ]
@@ -160,6 +162,7 @@ def test_run_marks_a_fully_paid_current_invoice_as_paid(monkeypatch) -> None:
                     key="NJU-2026-09",
                     lifecycle=ObligationLifecycle.COLLECTING_DATA,
                     current_amount=None,
+                    issue_date=None,
                     due_date=None,
                 )
             ],
@@ -213,6 +216,7 @@ def test_reconcile_obligation_reopens_only_when_closed_data_or_status_changed() 
         key="NJU-2026-09",
         lifecycle=ObligationLifecycle.READY,
         current_amount="12.34",
+        issue_date=date(2026, 9, 1),
         due_date=date(2026, 9, 15),
     )
 
@@ -248,6 +252,7 @@ def test_reconcile_obligation_reopens_only_when_closed_data_or_status_changed() 
         obligations=obligations,
         obligation=obligation,
         total=Decimal("12.34"),
+        issue_date=date(2026, 9, 1),
         due_date=date(2026, 9, 15),
         paid=False,
     )
@@ -260,6 +265,7 @@ def test_reconcile_obligation_reopens_only_when_closed_data_or_status_changed() 
         obligations=obligations,
         obligation=obligation,
         total=Decimal("12.34"),
+        issue_date=date(2026, 9, 1),
         due_date=date(2026, 9, 15),
         paid=True,
     )
@@ -279,6 +285,7 @@ def test_reconcile_obligation_marks_ready_before_paid_from_collecting_data() -> 
         key="NJU-2026-09",
         lifecycle=ObligationLifecycle.COLLECTING_DATA,
         current_amount=None,
+        issue_date=None,
         due_date=None,
     )
 
@@ -301,6 +308,7 @@ def test_reconcile_obligation_marks_ready_before_paid_from_collecting_data() -> 
         obligations=LifecycleEnforcingObligations(),
         obligation=obligation,
         total=Decimal("12.34"),
+        issue_date=date(2026, 9, 1),
         due_date=date(2026, 9, 15),
         paid=True,
     )
@@ -311,3 +319,45 @@ def test_reconcile_obligation_marks_ready_before_paid_from_collecting_data() -> 
         "ready:NJU-2026-09",
         "paid:NJU-2026-09",
     ]
+
+
+def test_reconcile_obligation_updates_issue_date_before_ready_from_draft() -> None:
+    calls: list[str] = []
+    obligation = SimpleNamespace(
+        key="NJU-2026-09",
+        lifecycle=ObligationLifecycle.DRAFT,
+        current_amount="12.34",
+        issue_date=None,
+        due_date=date(2026, 9, 15),
+    )
+
+    class LifecycleEnforcingObligations:
+        def update(self, key: str, **kwargs: object) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.DRAFT
+            assert kwargs == {
+                "current_amount": "12.34",
+                "issue_date": date(2026, 9, 1),
+                "due_date": date(2026, 9, 15),
+            }
+            calls.append(f"update:{key}")
+            obligation.lifecycle = ObligationLifecycle.COLLECTING_DATA
+
+        def mark_ready(self, key: str) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.COLLECTING_DATA
+            calls.append(f"ready:{key}")
+            obligation.lifecycle = ObligationLifecycle.READY
+
+        def mark_paid(self, _: str) -> None:
+            pytest.fail("An unpaid invoice must not be marked paid")
+
+    changed = sync._reconcile_obligation(
+        obligations=LifecycleEnforcingObligations(),
+        obligation=obligation,
+        total=Decimal("12.34"),
+        issue_date=date(2026, 9, 1),
+        due_date=date(2026, 9, 15),
+        paid=False,
+    )
+
+    assert changed
+    assert calls == ["update:NJU-2026-09", "ready:NJU-2026-09"]
