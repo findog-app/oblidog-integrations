@@ -31,7 +31,10 @@ RUN apt-get update \
     && echo "${supercronic_sha256}  /usr/local/bin/supercronic" | sha256sum --check \
     && chmod 0755 /usr/local/bin/supercronic \
     && groupadd --gid 10001 app \
-    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && install --directory --owner=app --group=app /home/app/.local/state/oblidog-integrations \
+    && apt-get purge -y --auto-remove curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv

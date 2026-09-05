@@ -133,10 +133,11 @@ docker compose logs -f ekartoteka-scheduler
 ```
 
 Disable it with `docker compose stop ekartoteka-scheduler`. Manual runs remain
-available through `docker compose run --rm ekartoteka`. The scheduler prevents
-overlapping runs with a per-integration `flock` lock and writes start, finish,
-duration, outcome, and exit code to Compose logs. A failed run is logged and
-does not stop later scheduled runs.
+available through `docker compose run --rm ekartoteka`. Both services mount the
+same named state volume and use the same per-integration `flock` lock, so manual
+and scheduled runs cannot overlap. The wrapper writes start, finish, duration,
+outcome, and exit code to Compose logs. A failed run is logged and does not stop
+later scheduled runs.
 
 To check whether a run currently holds the lock:
 

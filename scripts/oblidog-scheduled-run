@@ -4,6 +4,7 @@ set -eu
 integration="${1:?usage: oblidog-scheduled-run INTEGRATION}"
 state_dir="${HOME}/.local/state/oblidog-integrations"
 lock_path="$state_dir/${integration}.lock"
+export TZ="${OBLIDOG_SCHEDULER_TIMEZONE:-Europe/Warsaw}"
 mkdir -p "$state_dir"
 
 timestamp() {
@@ -16,9 +17,9 @@ if ! flock -n 9; then
     exit 0
 fi
 
-started_at="$(timestamp)"
+triggered_at="$(timestamp)"
 started_epoch="$(date +%s)"
-echo "scheduled_run_started integration=$integration scheduled_at=$started_at actual_start=$started_at"
+echo "scheduled_run_started integration=$integration triggered_at=$triggered_at"
 
 child_pid=""
 terminate() {
