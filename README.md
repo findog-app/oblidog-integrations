@@ -193,6 +193,53 @@ docker compose exec ekartoteka-scheduler sh -c \
   'flock -n /home/app/.local/state/oblidog-integrations/ekartoteka.lock -c "echo idle" || echo running'
 ```
 
+### NJU Mobile accounts
+
+The `nju` integration reads invoices from one NJU Mobile account and uses only
+invoices whose portal period matches the current `MM.RRRR`. It sums their full
+amounts, updates the one matching current-month Oblidog obligation, and marks
+it `ready` when any invoice is unpaid or `paid` when all are settled. Repeated
+runs with unchanged data are no-ops for obligations already in the target
+state. If an amount, due date, or paid state changes after `ready`/`paid`, the
+integration deliberately reopens the obligation, updates it, then applies the
+required `ready` and optional `paid` transitions.
+
+Run every account in a separate container with a separate credential file and
+Oblidog category. [`compose.nju.accounts.example.yaml`](compose.nju.accounts.example.yaml)
+contains two isolated account pairs (manual + scheduler). Copy it and create a
+credential file for each account:
+
+```bash
+cp compose.nju.accounts.example.yaml compose.nju.accounts.yaml
+cp .env.nju.example .env.nju.account-one
+cp .env.nju.example .env.nju.account-two
+chmod 600 .env.nju.account-one .env.nju.account-two
+```
+
+Set a distinct `NJU_ACCOUNT_NAME` and `OBLIDOG_CATEGORY_CODE` in each file.
+Add the schedules to the deployment `.env` file; staggering them is optional
+because each account has its own lock volume:
+
+```dotenv
+NJU_ACCOUNT_ONE_CRON=0 9 * * *
+NJU_ACCOUNT_TWO_CRON=5 9 * * *
+```
+
+Validate, pull, and manually test each account before enabling its scheduler:
+
+```bash
+docker compose -f compose.nju.accounts.yaml config --quiet
+docker compose -f compose.nju.accounts.yaml pull
+docker compose -f compose.nju.accounts.yaml run --rm nju-account-one
+docker compose -f compose.nju.accounts.yaml run --rm nju-account-two
+docker compose -f compose.nju.accounts.yaml up -d \
+  nju-account-one-scheduler nju-account-two-scheduler
+```
+
+The two schedulers use the same image and `nju` command, but separate `env_file`
+and lock volumes. A manual run of an account shares that account's lock; it does
+not block the other account.
+
 ## Releases
 
 Releases use Conventional Commits and a reviewable release PR:

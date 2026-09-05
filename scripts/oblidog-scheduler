@@ -2,7 +2,7 @@
 set -eu
 
 integration="${1:?usage: oblidog-scheduler INTEGRATION}"
-schedule="${EKARTOTEKA_CRON:?EKARTOTEKA_CRON must be set}"
+schedule="${OBLIDOG_SCHEDULER_CRON:-${EKARTOTEKA_CRON:?OBLIDOG_SCHEDULER_CRON or EKARTOTEKA_CRON must be set}}"
 timezone="${OBLIDOG_SCHEDULER_TIMEZONE:-Europe/Warsaw}"
 crontab_path="${HOME}/.${integration}-scheduler.crontab"
 

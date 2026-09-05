@@ -5,6 +5,7 @@ description = "Batch and one-shot integrations for Oblidog"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "beautifulsoup4>=4.12",
   "oblidog-client @ git+https://github.com/oblidog/oblidog-client-python.git",
   "pydantic>=2.0",
   "structlog>=25.0",
