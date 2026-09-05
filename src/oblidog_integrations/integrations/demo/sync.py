@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import os
 
-from findog_client import FindogClient
+from oblidog_client import OblidogClient
 
 from oblidog_integrations.integrations.demo.provider import fetch
 
@@ -19,7 +19,7 @@ def run() -> None:
     now = datetime.datetime.now(datetime.UTC)
     record = fetch()
 
-    with FindogClient(
+    with OblidogClient(
         base_url=_required_env("OBLIDOG_URL"),
         api_key=_required_env("OBLIDOG_API_KEY"),
     ) as client:

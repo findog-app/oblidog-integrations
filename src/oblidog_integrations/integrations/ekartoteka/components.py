@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from findog_client import FindogClient
+from oblidog_client import OblidogClient
 
 from oblidog_integrations.integrations.ekartoteka.ekartoteka import Ekartoteka
 
@@ -21,7 +21,7 @@ class FeeComponentsSyncResult:
 def sync_fee_components(
     *,
     ekartoteka: Ekartoteka,
-    findog: FindogClient,
+    oblidog: OblidogClient,
     category_code: str,
     on: date,
 ) -> FeeComponentsSyncResult:
@@ -29,7 +29,7 @@ def sync_fee_components(
 
     Args:
         ekartoteka: Authenticated provider facade used to fetch fee items.
-        findog: Authenticated Oblidog client used to upsert components.
+        oblidog: Authenticated Oblidog client used to upsert components.
         category_code: Prefix used to build the Oblidog obligation key.
         on: Month of the target obligation. The provider period is mapped from
             the preceding month.
@@ -41,7 +41,7 @@ def sync_fee_components(
     upserted_count = 0
     for component in ekartoteka.get_current_fee_components(on):
         for index, item in enumerate(component.items):
-            findog.obligations.upsert_component(
+            oblidog.obligations.upsert_component(
                 obligation_key,
                 type="monthly_fee",
                 label=item.name,

@@ -4,7 +4,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 
 import structlog
-from findog_client import FindogClient
+from oblidog_client import OblidogClient
 
 from oblidog_integrations.integrations.ekartoteka.category_data import (
     export_snapshot,
@@ -64,14 +64,14 @@ def run() -> None:
     )
     ekartoteka_client.login()
 
-    with FindogClient(
+    with OblidogClient(
         base_url=_required_env("OBLIDOG_URL"),
         api_key=_required_env("OBLIDOG_API_KEY"),
     ) as client:
         category_code = _required_env("OBLIDOG_CATEGORY_CODE")
         snapshot_export = export_snapshot(
             ekartoteka=ekartoteka_client,
-            findog=client,
+            oblidog=client,
             category_code=category_code,
             year=now.year,
         )
@@ -79,7 +79,7 @@ def run() -> None:
         components_syncs = [
             sync_fee_components(
                 ekartoteka=ekartoteka_client,
-                findog=client,
+                oblidog=client,
                 category_code=category_code,
                 on=period,
             )
@@ -88,7 +88,7 @@ def run() -> None:
         obligation_data_syncs = [
             populate_obligation_when_fee_period_is_available(
                 ekartoteka=ekartoteka_client,
-                findog=client,
+                oblidog=client,
                 category_code=category_code,
                 on=period,
             )
@@ -96,7 +96,7 @@ def run() -> None:
         ]
         obligation_check = mark_error_when_current_fee_period_is_missing(
             ekartoteka=ekartoteka_client,
-            findog=client,
+            oblidog=client,
             category_code=category_code,
             on=now.date(),
         )
