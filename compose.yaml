@@ -16,6 +16,7 @@ services:
     env_file:
       - .env.ekartoteka
     environment:
+      OBLIDOG_SCHEDULER_CRON: ${EKARTOTEKA_CRON:-0 9 * * *}
       EKARTOTEKA_CRON: ${EKARTOTEKA_CRON:-0 9 * * *}
       OBLIDOG_SCHEDULER_TIMEZONE: ${OBLIDOG_SCHEDULER_TIMEZONE:-Europe/Warsaw}
     restart: unless-stopped

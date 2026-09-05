@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from oblidog_integrations.integrations.demo import run as run_demo
 from oblidog_integrations.integrations.ekartoteka import run as run_ekartoteka
+from oblidog_integrations.integrations.nju import run as run_nju
 from oblidog_integrations.logging import configure_logging
 
 IntegrationRunner = Callable[[], None]
@@ -12,6 +13,7 @@ IntegrationRunner = Callable[[], None]
 INTEGRATIONS: dict[str, IntegrationRunner] = {
     "demo": run_demo,
     "ekartoteka": run_ekartoteka,
+    "nju": run_nju,
 }
 
 
