@@ -73,14 +73,72 @@ The demo integration expects exactly one matching obligation for the current mon
 
 ## Docker
 
-A single image contains all batch integrations. The integration name is passed as the container argument:
+A single, non-root production image contains all batch integrations. The
+integration name is passed as the container argument. Builds use the locked
+dependencies in `uv.lock`; `.env` files and credentials are excluded from the
+build context.
 
 ```bash
-docker build -t oblidog-integrations .
-
-docker run --rm \
-  --env-file demo.env \
-  oblidog-integrations demo
+docker build -t oblidog-integrations:local .
+docker run --rm oblidog-integrations:local --help
 ```
 
-This allows independent systemd timers on the runtime host to invoke different integrations while deployment and dependencies remain centralized.
+The published image is `ghcr.io/oblidog/oblidog-integrations:vX.Y.Z`. Only
+immutable release tags are published—there is no `latest`, `main`, or `edge`
+tag.
+
+To run e-Kartoteka through Compose, create the local credential file first:
+
+```bash
+cp .env.ekartoteka.example .env.ekartoteka
+# edit .env.ekartoteka with the required credentials and Oblidog settings
+printf 'OBLIDOG_INTEGRATIONS_VERSION=v0.1.0\n' > .env
+docker compose run --rm ekartoteka
+```
+
+Upgrade by changing `OBLIDOG_INTEGRATIONS_VERSION` to the selected published
+tag and pulling it before the next run. Roll back by setting it to an earlier
+tag; Compose never uses a mutable image tag.
+
+```bash
+OBLIDOG_INTEGRATIONS_VERSION=v0.2.0 docker compose pull ekartoteka
+OBLIDOG_INTEGRATIONS_VERSION=v0.2.0 docker compose run --rm ekartoteka
+```
+
+Future integrations are additional Compose services using the same image with
+their own command and `env_file`.
+
+## Releases
+
+Releases use Conventional Commits and a reviewable release PR:
+
+- `fix:` and `perf:` prepare a patch release;
+- `feat:` prepares a minor release;
+- `BREAKING CHANGE:` in the footer or `!` after the type prepares a major release.
+
+Documentation, test, CI, and ordinary chore commits do not create a release.
+On a qualifying push to `main`, Commitizen updates `pyproject.toml`, `uv.lock`,
+and `CHANGELOG.md` on a `release/vX.Y.Z` branch and creates (or reuses) a
+`bump: version X.Y.Z` PR. Merge that PR after CI approval. The finalizer then
+creates the annotated tag and GitHub Release and explicitly dispatches the
+multi-platform GHCR image publication.
+
+The first release is intentional and manual: run **Bootstrap initial release**
+from the Actions tab on `main` with `release_tag=v0.1.0`. It validates the
+project version, creates the annotated tag and GitHub Release, then publishes
+the initial image. Subsequent releases use the release-PR flow above.
+
+Generate a local changelog or inspect the next version with:
+
+```bash
+uv run cz version -p
+uv run cz bump --dry-run --yes --get-next
+```
+
+For a direct local invocation with credentials, use:
+
+```bash
+docker run --rm \
+  --env-file demo.env \
+  oblidog-integrations:local demo
+```

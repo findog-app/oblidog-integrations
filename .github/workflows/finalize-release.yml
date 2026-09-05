@@ -1,0 +1,52 @@
+name: Finalize release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  finalize-release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Resolve version
+        id: version
+        env:
+          RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          version="${RELEASE_BRANCH#release/v}"
+          [[ "$version" != "$RELEASE_BRANCH" && -n "$version" ]]
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Create annotated tag
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tag="v${RELEASE_VERSION}"
+          git rev-parse -q --verify "refs/tags/$tag" >/dev/null || git tag -a "$tag" -m "$tag"
+          git push origin "$tag"
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release view "v${RELEASE_VERSION}" >/dev/null 2>&1 || \
+            gh release create "v${RELEASE_VERSION}" --title "v${RELEASE_VERSION}" --generate-notes
+      - name: Trigger image publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: gh workflow run publish-images.yml --ref "v${RELEASE_VERSION}" -f release_tag="v${RELEASE_VERSION}"
