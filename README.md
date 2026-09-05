@@ -198,7 +198,11 @@ docker compose exec ekartoteka-scheduler sh -c \
 The `nju` integration reads invoices from one NJU Mobile account and uses only
 invoices whose portal period matches the current `MM.RRRR`. It sums their full
 amounts, updates the one matching current-month Oblidog obligation, and marks
-it `ready` when any invoice is unpaid or `paid` when all are settled.
+it `ready` when any invoice is unpaid or `paid` when all are settled. Repeated
+runs with unchanged data are no-ops for obligations already in the target
+state. If an amount, due date, or paid state changes after `ready`/`paid`, the
+integration deliberately reopens the obligation, updates it, then applies the
+required `ready` and optional `paid` transitions.
 
 Run every account in a separate container with a separate credential file and
 Oblidog category. [`compose.nju.accounts.example.yaml`](compose.nju.accounts.example.yaml)

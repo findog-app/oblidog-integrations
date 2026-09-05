@@ -82,7 +82,9 @@ class NjuClient:
                 "Referer": LOGIN_URL,
             },
         )
-        return self._open(opener, request)
+        invoices_page = self._open(opener, request)
+        _require_authenticated_page(invoices_page)
+        return invoices_page
 
     def _open(self, opener: Any, request: Request) -> str:
         try:
@@ -127,6 +129,13 @@ def invoices_for_current_period(
     """Return invoices whose portal period matches the supplied month."""
     period = now.strftime("%m.%Y")
     return [invoice for invoice in invoices if invoice.accounting_period == period]
+
+
+def _require_authenticated_page(html: str) -> None:
+    """Reject a login response that is actually the portal login form again."""
+    soup = BeautifulSoup(html, "html.parser")
+    if soup.select_one("input[name='phone-input'], input[name='password-form']"):
+        raise NjuError("NJU Mobile rejected the configured credentials")
 
 
 def _document_id(cell: Any) -> str:

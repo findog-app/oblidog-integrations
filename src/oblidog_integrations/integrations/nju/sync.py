@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from typing import Any
+from zoneinfo import ZoneInfo
 
 import structlog
-from oblidog_client import OblidogClient
+from oblidog_client import OblidogClient, ObligationLifecycle
 
 from oblidog_integrations.integrations.nju.api import (
     NjuClient,
@@ -14,6 +17,15 @@ from oblidog_integrations.integrations.nju.api import (
 )
 
 logger = structlog.get_logger(__name__)
+
+_EDITABLE_LIFECYCLES = {
+    ObligationLifecycle.DRAFT,
+    ObligationLifecycle.COLLECTING_DATA,
+}
+_REOPENABLE_LIFECYCLES = {
+    ObligationLifecycle.READY,
+    ObligationLifecycle.PAID,
+}
 
 
 def _required_env(name: str) -> str:
@@ -23,9 +35,62 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _has_current_values(obligation: Any, *, total: Decimal, due_date: date) -> bool:
+    try:
+        current_amount = Decimal(str(obligation.current_amount))
+    except (InvalidOperation, ValueError):
+        return False
+    return current_amount == total and obligation.due_date == due_date
+
+
+def _reconcile_obligation(
+    *,
+    obligations: Any,
+    obligation: Any,
+    total: Decimal,
+    due_date: date,
+    paid: bool,
+) -> bool:
+    """Apply NJU data while respecting Oblidog's obligation lifecycle."""
+    values_current = _has_current_values(obligation, total=total, due_date=due_date)
+    lifecycle = obligation.lifecycle
+    target_lifecycle = ObligationLifecycle.PAID if paid else ObligationLifecycle.READY
+
+    if lifecycle in _REOPENABLE_LIFECYCLES:
+        if values_current and lifecycle == target_lifecycle:
+            return False
+        obligations.reopen(obligation.key)
+        if not values_current:
+            obligations.update(
+                obligation.key,
+                current_amount=str(total),
+                due_date=due_date,
+            )
+    elif lifecycle in _EDITABLE_LIFECYCLES:
+        if not values_current:
+            obligations.update(
+                obligation.key,
+                current_amount=str(total),
+                due_date=due_date,
+            )
+    else:
+        logger.warning(
+            "nju_obligation_skipped",
+            obligation_key=obligation.key,
+            lifecycle=lifecycle.value,
+            reason="lifecycle_not_editable_or_reopenable",
+        )
+        return False
+
+    obligations.mark_ready(obligation.key)
+    if paid:
+        obligations.mark_paid(obligation.key)
+    return True
+
+
 def run() -> None:
     """Synchronize the current NJU invoice period for one configured account."""
-    now = datetime.now(UTC)
+    now = datetime.now(ZoneInfo("Europe/Warsaw"))
     account_name = os.getenv("NJU_ACCOUNT_NAME", "nju")
     invoices = invoices_for_current_period(
         NjuClient(
@@ -58,16 +123,14 @@ def run() -> None:
         obligation = obligations.data[0]
         total = sum((invoice.total_amount for invoice in invoices), start=0)
         due_date = min(invoice.due_date for invoice in invoices)
-        oblidog.obligations.update(
-            obligation.key,
-            current_amount=str(total),
-            due_date=due_date,
-        )
         paid = all(invoice.is_paid for invoice in invoices)
-        if paid:
-            oblidog.obligations.mark_paid(obligation.key)
-        else:
-            oblidog.obligations.mark_ready(obligation.key)
+        changed = _reconcile_obligation(
+            obligations=oblidog.obligations,
+            obligation=obligation,
+            total=total,
+            due_date=due_date,
+            paid=paid,
+        )
 
     logger.info(
         "nju_obligation_synced",
@@ -77,4 +140,5 @@ def run() -> None:
         current_amount=str(total),
         due_date=due_date.isoformat(),
         paid=paid,
+        changed=changed,
     )

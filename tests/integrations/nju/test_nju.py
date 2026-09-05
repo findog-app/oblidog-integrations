@@ -5,8 +5,13 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Self
 
+import pytest
+from oblidog_client import ObligationLifecycle
+
 from oblidog_integrations.integrations.nju import sync
 from oblidog_integrations.integrations.nju.api import (
+    NjuError,
+    _require_authenticated_page,
     invoices_for_current_period,
     parse_invoices,
 )
@@ -81,11 +86,20 @@ def test_run_updates_and_readies_an_unpaid_current_invoice(monkeypatch) -> None:
     marked_paid: list[str] = []
     obligations = SimpleNamespace(
         list=lambda **_: SimpleNamespace(
-            count=1, data=[SimpleNamespace(key="NJU-2026-09")]
+            count=1,
+            data=[
+                SimpleNamespace(
+                    key="NJU-2026-09",
+                    lifecycle=ObligationLifecycle.COLLECTING_DATA,
+                    current_amount=None,
+                    due_date=None,
+                )
+            ],
         ),
         update=lambda key, **kwargs: updates.append({"key": key, **kwargs}),
         mark_ready=marked_ready.append,
         mark_paid=marked_paid.append,
+        reopen=lambda _: None,
     )
 
     class FakeNjuClient:
@@ -140,11 +154,20 @@ def test_run_marks_a_fully_paid_current_invoice_as_paid(monkeypatch) -> None:
     marked_paid: list[str] = []
     obligations = SimpleNamespace(
         list=lambda **_: SimpleNamespace(
-            count=1, data=[SimpleNamespace(key="NJU-2026-09")]
+            count=1,
+            data=[
+                SimpleNamespace(
+                    key="NJU-2026-09",
+                    lifecycle=ObligationLifecycle.COLLECTING_DATA,
+                    current_amount=None,
+                    due_date=None,
+                )
+            ],
         ),
         update=lambda *_args, **_kwargs: None,
         mark_ready=lambda _: None,
         mark_paid=marked_paid.append,
+        reopen=lambda _: None,
     )
 
     class FakeNjuClient:
@@ -175,3 +198,116 @@ def test_run_marks_a_fully_paid_current_invoice_as_paid(monkeypatch) -> None:
     sync.run()
 
     assert marked_paid == ["NJU-2026-09"]
+
+
+def test_login_form_response_is_rejected_after_authentication() -> None:
+    with pytest.raises(NjuError, match="rejected"):
+        _require_authenticated_page(
+            '<form><input name="phone-input"><input name="password-form"></form>'
+        )
+
+
+def test_reconcile_obligation_reopens_only_when_closed_data_or_status_changed() -> None:
+    calls: list[str] = []
+    obligation = SimpleNamespace(
+        key="NJU-2026-09",
+        lifecycle=ObligationLifecycle.READY,
+        current_amount="12.34",
+        due_date=date(2026, 9, 15),
+    )
+
+    class LifecycleEnforcingObligations:
+        def reopen(self, key: str) -> None:
+            assert obligation.lifecycle in {
+                ObligationLifecycle.READY,
+                ObligationLifecycle.PAID,
+            }
+            calls.append(f"reopen:{key}")
+            obligation.lifecycle = ObligationLifecycle.COLLECTING_DATA
+
+        def update(self, key: str, **_: object) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.COLLECTING_DATA
+            calls.append(f"update:{key}")
+
+        def mark_ready(self, key: str) -> None:
+            assert obligation.lifecycle in {
+                ObligationLifecycle.DRAFT,
+                ObligationLifecycle.COLLECTING_DATA,
+            }
+            calls.append(f"ready:{key}")
+            obligation.lifecycle = ObligationLifecycle.READY
+
+        def mark_paid(self, key: str) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.READY
+            calls.append(f"paid:{key}")
+            obligation.lifecycle = ObligationLifecycle.PAID
+
+    obligations = LifecycleEnforcingObligations()
+
+    unchanged = sync._reconcile_obligation(
+        obligations=obligations,
+        obligation=obligation,
+        total=Decimal("12.34"),
+        due_date=date(2026, 9, 15),
+        paid=False,
+    )
+
+    assert not unchanged
+    assert not calls
+
+    obligation.current_amount = "15.00"
+    changed = sync._reconcile_obligation(
+        obligations=obligations,
+        obligation=obligation,
+        total=Decimal("12.34"),
+        due_date=date(2026, 9, 15),
+        paid=True,
+    )
+
+    assert changed
+    assert calls == [
+        "reopen:NJU-2026-09",
+        "update:NJU-2026-09",
+        "ready:NJU-2026-09",
+        "paid:NJU-2026-09",
+    ]
+
+
+def test_reconcile_obligation_marks_ready_before_paid_from_collecting_data() -> None:
+    calls: list[str] = []
+    obligation = SimpleNamespace(
+        key="NJU-2026-09",
+        lifecycle=ObligationLifecycle.COLLECTING_DATA,
+        current_amount=None,
+        due_date=None,
+    )
+
+    class LifecycleEnforcingObligations:
+        def update(self, key: str, **_: object) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.COLLECTING_DATA
+            calls.append(f"update:{key}")
+
+        def mark_ready(self, key: str) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.COLLECTING_DATA
+            calls.append(f"ready:{key}")
+            obligation.lifecycle = ObligationLifecycle.READY
+
+        def mark_paid(self, key: str) -> None:
+            assert obligation.lifecycle is ObligationLifecycle.READY
+            calls.append(f"paid:{key}")
+            obligation.lifecycle = ObligationLifecycle.PAID
+
+    changed = sync._reconcile_obligation(
+        obligations=LifecycleEnforcingObligations(),
+        obligation=obligation,
+        total=Decimal("12.34"),
+        due_date=date(2026, 9, 15),
+        paid=True,
+    )
+
+    assert changed
+    assert calls == [
+        "update:NJU-2026-09",
+        "ready:NJU-2026-09",
+        "paid:NJU-2026-09",
+    ]
