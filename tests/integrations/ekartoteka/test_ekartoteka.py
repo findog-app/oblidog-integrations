@@ -4,8 +4,7 @@ from types import SimpleNamespace
 from typing import Self
 
 import pytest
-from findog_client import ObligationLifecycle
-from findog_client.generated.errors import UnexpectedStatus
+from oblidog_client import OblidogApiError, ObligationLifecycle
 
 from oblidog_integrations.integrations.ekartoteka import sync
 from oblidog_integrations.integrations.ekartoteka.api import EkartotekaApi
@@ -351,7 +350,7 @@ def test_incomplete_settlements_do_not_update_or_ready_an_obligation() -> None:
 
     updates: list[dict[str, object]] = []
     marked_ready: list[str] = []
-    findog = SimpleNamespace(
+    oblidog = SimpleNamespace(
         obligations=SimpleNamespace(
             get=lambda key: SimpleNamespace(
                 key=key, lifecycle=ObligationLifecycle.COLLECTING_DATA
@@ -366,7 +365,7 @@ def test_incomplete_settlements_do_not_update_or_ready_an_obligation() -> None:
     with pytest.raises(IncompleteSettlementDataError):
         populate_obligation_when_fee_period_is_available(
             ekartoteka=Ekartoteka(api=IncompleteComponentsApi()),  # type: ignore[arg-type]
-            findog=findog,
+            oblidog=oblidog,
             category_code="FLAT",
             on=date(2026, 10, 3),
         )
@@ -575,7 +574,7 @@ def test_run_exports_the_snapshot_as_category_data(monkeypatch) -> None:
             }
             return []
 
-    class FakeFindogClient:
+    class FakeOblidogClient:
         def __init__(self, *, base_url: str, api_key: str) -> None:
             captured["base_url"] = base_url
             captured["api_key"] = api_key
@@ -592,10 +591,10 @@ def test_run_exports_the_snapshot_as_category_data(monkeypatch) -> None:
             captured.update(kwargs)
 
         def latest(self, _: str) -> object:
-            raise UnexpectedStatus(404, b"")
+            raise OblidogApiError(404)
 
     monkeypatch.setattr(sync, "Ekartoteka", FakeSyncEkartoteka)
-    monkeypatch.setattr(sync, "FindogClient", FakeFindogClient)
+    monkeypatch.setattr(sync, "OblidogClient", FakeOblidogClient)
     monkeypatch.setenv("EKARTOTEKA_USERNAME", "user")
     monkeypatch.setenv("EKARTOTEKA_PASSWORD", "password")
     monkeypatch.setenv("OBLIDOG_URL", "https://oblidog.example.com")
@@ -612,7 +611,7 @@ def test_run_exports_the_snapshot_as_category_data(monkeypatch) -> None:
 
 def test_fee_components_are_upserted_with_provider_metadata() -> None:
     upserts: list[dict[str, object]] = []
-    findog = SimpleNamespace(
+    oblidog = SimpleNamespace(
         obligations=SimpleNamespace(
             upsert_component=lambda obligation_key, **kwargs: upserts.append(
                 {"obligation_key": obligation_key, **kwargs}
@@ -622,7 +621,7 @@ def test_fee_components_are_upserted_with_provider_metadata() -> None:
 
     result = sync_fee_components(
         ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
-        findog=findog,
+        oblidog=oblidog,
         category_code="FLAT",
         on=date(2026, 10, 3),
     )
@@ -682,11 +681,11 @@ def test_published_fees_populate_and_ready_draft_or_collecting_obligation() -> N
             ),
             mark_ready=marked_ready.append,
         )
-        findog = SimpleNamespace(obligations=obligations)
+        oblidog = SimpleNamespace(obligations=obligations)
 
         result = populate_obligation_when_fee_period_is_available(
             ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
-            findog=findog,
+            oblidog=oblidog,
             category_code="FLAT",
             on=date(2026, 10, 3),
         )
@@ -714,11 +713,11 @@ def test_published_fees_do_not_overwrite_ready_obligation() -> None:
         update=lambda key, **kwargs: updates.append({"obligation_key": key, **kwargs}),
         mark_ready=marked_ready.append,
     )
-    findog = SimpleNamespace(obligations=obligations)
+    oblidog = SimpleNamespace(obligations=obligations)
 
     result = populate_obligation_when_fee_period_is_available(
         ekartoteka=Ekartoteka(api=FakeComponentsApi()),  # type: ignore[arg-type]
-        findog=findog,
+        oblidog=oblidog,
         category_code="FLAT",
         on=date(2026, 10, 3),
     )
@@ -739,11 +738,11 @@ def test_snapshot_identical_to_latest_category_data_is_not_exported() -> None:
         ),
         create=lambda _, **kwargs: created.append(kwargs),
     )
-    findog = SimpleNamespace(category_data=category_data)
+    oblidog = SimpleNamespace(category_data=category_data)
 
     result = export_snapshot(
         ekartoteka=Ekartoteka(api=FakeSnapshotApi()),  # type: ignore[arg-type]
-        findog=findog,
+        oblidog=oblidog,
         category_code="FLAT",
         year=2026,
     )
@@ -751,6 +750,22 @@ def test_snapshot_identical_to_latest_category_data_is_not_exported() -> None:
     assert result.snapshot == snapshot
     assert not result.created
     assert not created
+
+
+def test_snapshot_export_propagates_non_missing_oblidog_api_errors() -> None:
+    class FailingCategoryData:
+        def latest(self, _: str) -> object:
+            raise OblidogApiError(500, b"upstream error")
+
+    oblidog = SimpleNamespace(category_data=FailingCategoryData())
+
+    with pytest.raises(OblidogApiError, match="HTTP 500"):
+        export_snapshot(
+            ekartoteka=Ekartoteka(api=FakeSnapshotApi()),  # type: ignore[arg-type]
+            oblidog=oblidog,
+            category_code="FLAT",
+            year=2026,
+        )
 
 
 def test_missing_fee_period_marks_non_collecting_obligation_as_error() -> None:
@@ -762,12 +777,12 @@ def test_missing_fee_period_marks_non_collecting_obligation_as_error() -> None:
         ),
         mark_error=marked_as_error.append,
     )
-    findog = SimpleNamespace(obligations=obligations)
+    oblidog = SimpleNamespace(obligations=obligations)
     ekartoteka = SimpleNamespace(has_current_fee_period=lambda _: False)
 
     result = mark_error_when_current_fee_period_is_missing(
         ekartoteka=ekartoteka,
-        findog=findog,
+        oblidog=oblidog,
         category_code="FLAT",
         on=date(2026, 9, 3),
     )
@@ -787,12 +802,12 @@ def test_missing_fee_period_keeps_collecting_obligation_unchanged() -> None:
         ),
         mark_error=marked_as_error.append,
     )
-    findog = SimpleNamespace(obligations=obligations)
+    oblidog = SimpleNamespace(obligations=obligations)
     ekartoteka = SimpleNamespace(has_current_fee_period=lambda _: False)
 
     result = mark_error_when_current_fee_period_is_missing(
         ekartoteka=ekartoteka,
-        findog=findog,
+        oblidog=oblidog,
         category_code="FLAT",
         on=date(2026, 9, 3),
     )

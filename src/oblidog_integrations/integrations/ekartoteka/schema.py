@@ -18,7 +18,7 @@ MVP_ACCOUNT_TITLES = {
 
 
 def settlement_snapshot_schema() -> dict[str, Any]:
-    """Return the JSON Schema accepted by Findog Ledger for this snapshot."""
+    """Return the JSON Schema accepted by Oblidog Ledger for this snapshot."""
     properties: dict[str, dict[str, Any]] = {
         "year": {
             "type": "integer",
@@ -54,7 +54,7 @@ def settlement_snapshot_schema() -> dict[str, Any]:
 
 
 def main() -> None:
-    """Print the schema for pasting into Findog Ledger."""
+    """Print the schema for pasting into Oblidog Ledger."""
     print(json.dumps(settlement_snapshot_schema(), indent=2))
 
 

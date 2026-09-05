@@ -2,7 +2,7 @@
 
 Batch and one-shot integrations for Oblidog.
 
-The repository is a monorepo for integrations that run periodically, fetch data from an external provider, synchronize it through `findog-client-python`, and exit. Long-running services such as mail ingestion should live separately.
+The repository is a monorepo for integrations that run periodically, fetch data from an external provider, synchronize it through `oblidog-client`, and exit. Long-running services such as mail ingestion should live separately.
 
 ## Structure
 
@@ -37,7 +37,7 @@ make print-ekartoteka-schema
 ```
 
 `make print-ekartoteka-schema` prints the JSON Schema for the flat e-Kartoteka
-category-data record. Paste it into the category-schema import in Findog Ledger.
+category-data record. Paste it into the category-schema import in Oblidog Ledger.
 
 Before running e-Kartoteka for the first time, prepare its local configuration:
 

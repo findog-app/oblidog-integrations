@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
-from findog_client import FindogClient, ObligationLifecycle
+from oblidog_client import OblidogClient, ObligationLifecycle
 
 from oblidog_integrations.integrations.ekartoteka.ekartoteka import Ekartoteka
 
@@ -42,7 +42,7 @@ class ObligationFeeDataSyncResult:
 def populate_obligation_when_fee_period_is_available(
     *,
     ekartoteka: Ekartoteka,
-    findog: FindogClient,
+    oblidog: OblidogClient,
     category_code: str,
     on: date,
 ) -> ObligationFeeDataSyncResult:
@@ -55,7 +55,7 @@ def populate_obligation_when_fee_period_is_available(
     Args:
         ekartoteka: Authenticated provider facade used to fetch charges and
             settlement-ledger amounts.
-        findog: Authenticated Oblidog client used to update the obligation.
+        oblidog: Authenticated Oblidog client used to update the obligation.
         category_code: Prefix used to build the Oblidog obligation key.
         on: Month of the target obligation.
 
@@ -76,7 +76,7 @@ def populate_obligation_when_fee_period_is_available(
         )
 
     obligation_key = f"{category_code}-{on.year:04d}-{on.month:02d}"
-    obligation = findog.obligations.get(obligation_key)
+    obligation = oblidog.obligations.get(obligation_key)
     if obligation.lifecycle not in _LIFECYCLES_ALLOWED_WITHOUT_FEES:
         return ObligationFeeDataSyncResult(
             fee_period_available=True,
@@ -91,13 +91,13 @@ def populate_obligation_when_fee_period_is_available(
     current_amount = ekartoteka.get_obligation_amount_from_settlements(on)
     issue_date = components[0].period.starts_on
     due_date = date(on.year, on.month, 15)
-    findog.obligations.update(
+    oblidog.obligations.update(
         obligation.key,
         current_amount=str(current_amount),
         issue_date=issue_date,
         due_date=due_date,
     )
-    findog.obligations.mark_ready(obligation.key)
+    oblidog.obligations.mark_ready(obligation.key)
     return ObligationFeeDataSyncResult(
         fee_period_available=True,
         obligation_key=obligation.key,
@@ -112,7 +112,7 @@ def populate_obligation_when_fee_period_is_available(
 def mark_error_when_current_fee_period_is_missing(
     *,
     ekartoteka: Ekartoteka,
-    findog: FindogClient,
+    oblidog: OblidogClient,
     category_code: str,
     on: date,
 ) -> ObligationFeePeriodCheck:
@@ -124,7 +124,7 @@ def mark_error_when_current_fee_period_is_missing(
 
     Args:
         ekartoteka: Authenticated provider facade used to check fee periods.
-        findog: Authenticated Oblidog client used to read and mark obligations.
+        oblidog: Authenticated Oblidog client used to read and mark obligations.
         category_code: Prefix used to build the Oblidog obligation key.
         on: Month of the obligation being checked.
 
@@ -140,7 +140,7 @@ def mark_error_when_current_fee_period_is_missing(
         )
 
     obligation_key = f"{category_code}-{on.year:04d}-{on.month:02d}"
-    obligation = findog.obligations.get(obligation_key)
+    obligation = oblidog.obligations.get(obligation_key)
     if obligation.lifecycle in _LIFECYCLES_ALLOWED_WITHOUT_FEES:
         return ObligationFeePeriodCheck(
             fee_period_available=False,
@@ -149,7 +149,7 @@ def mark_error_when_current_fee_period_is_missing(
             marked_as_error=False,
         )
 
-    findog.obligations.mark_error(obligation.key)
+    oblidog.obligations.mark_error(obligation.key)
     return ObligationFeePeriodCheck(
         fee_period_available=False,
         obligation_key=obligation.key,
