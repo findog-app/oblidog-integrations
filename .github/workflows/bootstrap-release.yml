@@ -1,0 +1,51 @@
+name: Bootstrap initial release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Initial tag to create (must be v0.1.0)
+        required: true
+        default: v0.1.0
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  bootstrap:
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+      - run: uv sync --frozen
+      - name: Validate bootstrap request
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          [[ "$RELEASE_TAG" == "v0.1.0" ]]
+          [[ "$(uv run --frozen cz version -p)" == "0.1.0" ]]
+          ! git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null
+      - name: Create annotated tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$RELEASE_TAG" -m "$RELEASE_TAG"
+          git push origin "$RELEASE_TAG"
+          gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+      - name: Trigger image publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh workflow run publish-images.yml --ref "$RELEASE_TAG" -f release_tag="$RELEASE_TAG"

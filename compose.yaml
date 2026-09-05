@@ -1,0 +1,7 @@
+services:
+  ekartoteka:
+    image: ghcr.io/oblidog/oblidog-integrations:${OBLIDOG_INTEGRATIONS_VERSION:-v0.1.0}
+    command: ["ekartoteka"]
+    env_file:
+      - .env.ekartoteka
+    restart: "no"

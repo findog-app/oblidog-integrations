@@ -24,10 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7
         with:
           context: .
           push: false
-          platforms: linux/arm64
+          load: true
+          platforms: linux/amd64
+          tags: oblidog-integrations:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: docker run --rm oblidog-integrations:ci --help
