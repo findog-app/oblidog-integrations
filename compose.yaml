@@ -5,3 +5,14 @@ services:
     env_file:
       - .env.ekartoteka
     restart: "no"
+
+  ekartoteka-scheduler:
+    image: ghcr.io/oblidog/oblidog-integrations:${OBLIDOG_INTEGRATIONS_VERSION:-v0.1.0}
+    entrypoint: ["/usr/local/bin/oblidog-scheduler"]
+    command: ["ekartoteka"]
+    env_file:
+      - .env.ekartoteka
+    environment:
+      EKARTOTEKA_CRON: ${EKARTOTEKA_CRON:-0 9 * * *}
+      OBLIDOG_SCHEDULER_TIMEZONE: ${OBLIDOG_SCHEDULER_TIMEZONE:-Europe/Warsaw}
+    restart: unless-stopped

@@ -108,6 +108,43 @@ OBLIDOG_INTEGRATIONS_VERSION=v0.2.0 docker compose run --rm ekartoteka
 Future integrations are additional Compose services using the same image with
 their own command and `env_file`.
 
+### e-Kartoteka scheduler
+
+The optional `ekartoteka-scheduler` service runs the same image as a persistent,
+non-root scheduler. It invokes the CLI directly; it neither mounts the Docker
+socket nor starts sibling containers. The default schedule is `0 9 * * *` in
+`Europe/Warsaw`, leaving time before Ledger's 09:30 daily `system-run`.
+
+Set the schedule and timezone in the deployment `.env` file (not in the
+credential file):
+
+```dotenv
+OBLIDOG_INTEGRATIONS_VERSION=v0.2.0
+EKARTOTEKA_CRON=0 9 * * *
+OBLIDOG_SCHEDULER_TIMEZONE=Europe/Warsaw
+```
+
+Enable it after pulling the selected immutable image tag:
+
+```bash
+docker compose pull ekartoteka-scheduler
+docker compose up -d ekartoteka-scheduler
+docker compose logs -f ekartoteka-scheduler
+```
+
+Disable it with `docker compose stop ekartoteka-scheduler`. Manual runs remain
+available through `docker compose run --rm ekartoteka`. The scheduler prevents
+overlapping runs with a per-integration `flock` lock and writes start, finish,
+duration, outcome, and exit code to Compose logs. A failed run is logged and
+does not stop later scheduled runs.
+
+To check whether a run currently holds the lock:
+
+```bash
+docker compose exec ekartoteka-scheduler sh -c \
+  'flock -n /home/app/.local/state/oblidog-integrations/ekartoteka.lock -c "echo idle" || echo running'
+```
+
 ## Releases
 
 Releases use Conventional Commits and a reviewable release PR:
