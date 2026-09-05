@@ -85,28 +85,113 @@ docker run --rm oblidog-integrations:local --help
 
 The published image is `ghcr.io/oblidog/oblidog-integrations:vX.Y.Z`. Only
 immutable release tags are published—there is no `latest`, `main`, or `edge`
-tag.
+tag. Do not deploy until the selected tag appears in [GitHub
+Releases](https://github.com/oblidog/oblidog-integrations/releases) and the
+release's image-publication workflow has completed.
 
-To run e-Kartoteka through Compose, create the local credential file first:
+### Deploy e-Kartoteka on a host
+
+The deployment host needs Docker Engine with the Compose plugin and access to
+GHCR. If the package is private, authenticate before pulling with a GitHub
+token that has package-read access:
 
 ```bash
+docker login ghcr.io
+```
+
+Choose an existing release tag and clone the matching Compose configuration.
+Using the same tag for both prevents a newer configuration from running against
+an older image.
+
+```bash
+export OBLIDOG_INTEGRATIONS_VERSION=vX.Y.Z # replace with an existing release tag
+git clone --branch "$OBLIDOG_INTEGRATIONS_VERSION" --depth 1 \
+  https://github.com/oblidog/oblidog-integrations.git
+cd oblidog-integrations
+cp .env.deploy.example .env
 cp .env.ekartoteka.example .env.ekartoteka
-# edit .env.ekartoteka with the required credentials and Oblidog settings
-printf 'OBLIDOG_INTEGRATIONS_VERSION=v0.1.0\n' > .env
+chmod 600 .env.ekartoteka
+```
+
+Edit `.env` and replace its version with the selected release tag. Edit
+`.env.ekartoteka` with `EKARTOTEKA_USERNAME`, `EKARTOTEKA_PASSWORD`,
+`OBLIDOG_URL`, `OBLIDOG_API_KEY`, and `OBLIDOG_CATEGORY_CODE`. Keep both files
+on the host: they are ignored by Git and excluded from image builds.
+
+Validate the resolved configuration, pull the immutable image, and make one
+manual run before enabling the scheduler:
+
+```bash
+docker compose config --quiet
+docker compose pull
 docker compose run --rm ekartoteka
 ```
 
-Upgrade by changing `OBLIDOG_INTEGRATIONS_VERSION` to the selected published
-tag and pulling it before the next run. Roll back by setting it to an earlier
-tag; Compose never uses a mutable image tag.
+If that run succeeds, enable the persistent scheduler and verify it:
 
 ```bash
-OBLIDOG_INTEGRATIONS_VERSION=v0.2.0 docker compose pull ekartoteka
-OBLIDOG_INTEGRATIONS_VERSION=v0.2.0 docker compose run --rm ekartoteka
+docker compose up -d --no-deps ekartoteka-scheduler
+docker compose ps
+docker compose logs -f ekartoteka-scheduler
 ```
 
 Future integrations are additional Compose services using the same image with
 their own command and `env_file`.
+
+### Upgrade and rollback
+
+To upgrade, edit `OBLIDOG_INTEGRATIONS_VERSION` in `.env` to another existing
+release tag, then pull and recreate only the scheduler. Run the same steps with
+an earlier tag to roll back.
+
+```bash
+docker compose config --quiet
+docker compose pull ekartoteka-scheduler
+docker compose up -d --no-deps --force-recreate ekartoteka-scheduler
+docker compose ps
+```
+
+The scheduler is the only long-lived service. It does not deploy itself or the
+Ledger; updating it is an explicit host operation.
+
+### e-Kartoteka scheduler
+
+The optional `ekartoteka-scheduler` service runs the same image as a persistent,
+non-root scheduler. It invokes the CLI directly; it neither mounts the Docker
+socket nor starts sibling containers. The default schedule is `0 9 * * *` in
+`Europe/Warsaw`, leaving time before Ledger's 09:30 daily `system-run`.
+
+Set the schedule and timezone in the deployment `.env` file (not in the
+credential file). Start from `.env.deploy.example`:
+
+```dotenv
+# Use an existing immutable GitHub Release tag.
+OBLIDOG_INTEGRATIONS_VERSION=vX.Y.Z
+EKARTOTEKA_CRON=0 9 * * *
+OBLIDOG_SCHEDULER_TIMEZONE=Europe/Warsaw
+```
+
+Enable it after the manual deployment check:
+
+```bash
+docker compose pull ekartoteka-scheduler
+docker compose up -d ekartoteka-scheduler
+docker compose logs -f ekartoteka-scheduler
+```
+
+Disable it with `docker compose stop ekartoteka-scheduler`. Manual runs remain
+available through `docker compose run --rm ekartoteka`. Both services mount the
+same named state volume and use the same per-integration `flock` lock, so manual
+and scheduled runs cannot overlap. The wrapper writes start, finish, duration,
+outcome, and exit code to Compose logs. A failed run is logged and does not stop
+later scheduled runs.
+
+To check whether a run currently holds the lock:
+
+```bash
+docker compose exec ekartoteka-scheduler sh -c \
+  'flock -n /home/app/.local/state/oblidog-integrations/ekartoteka.lock -c "echo idle" || echo running'
+```
 
 ## Releases
 
